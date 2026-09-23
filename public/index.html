@@ -39,6 +39,7 @@
 
         <div class="event-controls" aria-labelledby="event-controls-heading">
           <h3 id="event-controls-heading">Reproduction controls</h3>
+          <p class="hint">Each control records only while its stream is enabled. Markers are always available.</p>
           <button id="add-click" type="button" disabled>Record Place order click</button>
           <button id="add-network" type="button" disabled>Record 422 network metadata</button>
           <button id="add-console" type="button" disabled>Record console exception</button>
@@ -72,6 +73,7 @@
         <div class="button-row">
           <button id="scan-button" type="button" disabled>Scan for sensitive data</button>
           <button id="apply-review" class="secondary" type="button" disabled>Apply review to derived copy</button>
+          <button id="reset-review" class="secondary" type="button" disabled>Start review again</button>
         </div>
         <div id="review-status" class="operation-status" role="status" aria-live="polite">No draft is ready for review.</div>
         <div id="finding-list" class="finding-list"></div>
