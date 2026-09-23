@@ -2,6 +2,7 @@ const SESSION_VERSION = 1;
 const REPORT_FORMAT = "bugtape.local-report";
 const MAX_EVENTS = 5_000;
 const MAX_EVENT_BYTES = 20_000;
+export const MAX_SESSION_DURATION_MS = 3_600_000;
 
 export class DiagnosticError extends Error {
   constructor(message, path, code = "INVALID_SESSION") {
@@ -151,9 +152,13 @@ export function validateSession(input) {
     );
   }
   const durationMs = input.durationMs;
-  if (!Number.isFinite(durationMs) || durationMs < 0 || durationMs > 3_600_000) {
+  if (
+    !Number.isFinite(durationMs) ||
+    durationMs < 0 ||
+    durationMs > MAX_SESSION_DURATION_MS
+  ) {
     throw new DiagnosticError(
-      "session.durationMs must be between 0 and 3600000",
+      `session.durationMs must be between 0 and ${MAX_SESSION_DURATION_MS}`,
       "session.durationMs"
     );
   }
@@ -200,7 +205,15 @@ export function validateSession(input) {
   };
 }
 
-function networkMetadata(payload) {
+function finiteNumber(value, path) {
+  const number = Number(value ?? 0);
+  if (!Number.isFinite(number)) {
+    throw new DiagnosticError(`${path} must be a finite number`, path);
+  }
+  return number;
+}
+
+function networkMetadata(payload, path = "payload") {
   let host = String(payload.host ?? "");
   if (payload.url) {
     try {
@@ -212,9 +225,9 @@ function networkMetadata(payload) {
   return {
     method: String(payload.method ?? "GET").toUpperCase(),
     host,
-    status: Number(payload.status ?? 0),
-    durationMs: Number(payload.durationMs ?? 0),
-    sizeBytes: Number(payload.sizeBytes ?? 0)
+    status: finiteNumber(payload.status, `${path}.status`),
+    durationMs: finiteNumber(payload.durationMs, `${path}.durationMs`),
+    sizeBytes: finiteNumber(payload.sizeBytes, `${path}.sizeBytes`)
   };
 }
 
@@ -254,6 +267,10 @@ export class DiagnosticRecorder {
     if (!Array.isArray(streams) || streams.length === 0) {
       throw new DiagnosticError("Select at least one diagnostic stream", "streams");
     }
+    const enabledStreams = streams.map((stream, index) =>
+      nonEmpty(stream, `streams.${index}`)
+    );
+    nonEmpty(title, "title");
     const capturedEnvironment = capturedValue(environment, "environment");
     this.#startedMono = this.#now();
     const startedAt = this.#wallNow().toISOString();
@@ -268,7 +285,7 @@ export class DiagnosticRecorder {
         startedMonotonicMs: this.#startedMono,
         stoppedMonotonicMs: this.#startedMono
       },
-      streams: [...new Set(streams.map(String))],
+      streams: [...new Set(enabledStreams)],
       environment: capturedEnvironment,
       events: []
     };
@@ -306,6 +323,15 @@ export class DiagnosticRecorder {
         "SESSION_TOO_LARGE"
       );
     }
+    nonEmpty(type, "type");
+    const atMs = this.#elapsed();
+    if (atMs > MAX_SESSION_DURATION_MS) {
+      throw new DiagnosticError(
+        "Recording has reached its one-hour limit",
+        "recorder.durationMs",
+        "SESSION_TOO_LONG"
+      );
+    }
     let capturedPayload = safePayload(payload);
     if (stream === "network") {
       capturedPayload = networkMetadata(capturedPayload);
@@ -318,14 +344,15 @@ export class DiagnosticRecorder {
         "EVENT_TOO_LARGE"
       );
     }
-    const event = {
-      id: `event-${++this.#sequence}`,
-      sequence: this.#sequence,
-      stream,
-      type: String(type),
-      atMs: this.#elapsed(),
-      payload: capturedPayload
-    };
+    const sequence = this.#sequence + 1;
+    // Check the event exactly as stop() will, so nothing accepted here can
+    // later stop the recording from being finalised.
+    const event = validateEvent(
+      { id: `event-${sequence}`, sequence, stream, type, atMs, payload: capturedPayload },
+      this.#session.events.length,
+      atMs
+    );
+    this.#sequence = sequence;
     this.#session.events.push(event);
     return clone(event);
   }
@@ -356,7 +383,7 @@ export class DiagnosticRecorder {
     }
     const stoppedMono = this.#state === "paused" ? this.#pausedAt : this.#now();
     const stoppedSession = clone(this.#session);
-    stoppedSession.durationMs = this.#elapsed();
+    stoppedSession.durationMs = Math.min(this.#elapsed(), MAX_SESSION_DURATION_MS);
     stoppedSession.clock.stoppedMonotonicMs = stoppedMono;
     const validated = validateSession(stoppedSession);
     this.#session = validated;
@@ -369,7 +396,7 @@ export class DiagnosticRecorder {
       return undefined;
     }
     const session = clone(this.#session);
-    session.durationMs = this.#elapsed();
+    session.durationMs = Math.min(this.#elapsed(), MAX_SESSION_DURATION_MS);
     session.clock.stoppedMonotonicMs =
       this.#state === "paused" ? this.#pausedAt : this.#now();
     return session;

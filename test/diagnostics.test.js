@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  DiagnosticError,
   DiagnosticRecorder,
+  MAX_SESSION_DURATION_MS,
   applyReview,
   buildTimeline,
   createMarkdownReport,
@@ -314,14 +316,64 @@ test("the recorder enforces its event limit before appending", () => {
   assert.equal(recorder.snapshot().events.length, 5_000);
 });
 
-test("stop validates a candidate session before changing lifecycle state", () => {
+test("a recording that runs past the one-hour limit can still be stopped", () => {
   let now = 0;
   const recorder = new DiagnosticRecorder({ monotonicNow: () => now });
   recorder.start({ confirmed: true, streams: ["console"] });
-  now = 3_600_001;
+  now = 10;
+  recorder.append("console", "log", { message: "before the limit" });
+  now = MAX_SESSION_DURATION_MS + 5_000;
   assert.throws(
-    () => recorder.stop(),
-    (error) => error.path === "session.durationMs"
+    () => recorder.append("console", "log", { message: "after the limit" }),
+    (error) => error.code === "SESSION_TOO_LONG"
   );
-  assert.equal(recorder.state, "recording");
+  assert.equal(recorder.snapshot().durationMs, MAX_SESSION_DURATION_MS);
+  const session = recorder.stop();
+  assert.equal(recorder.state, "stopped");
+  assert.equal(session.durationMs, MAX_SESSION_DURATION_MS);
+  assert.equal(session.events.length, 1);
+});
+
+test("the recorder rejects a title or stream it could not export", () => {
+  for (const options of [
+    { title: "" },
+    { title: 42 },
+    { streams: ["console", ""] },
+    { streams: [7] }
+  ]) {
+    const recorder = new DiagnosticRecorder({ monotonicNow: () => 0 });
+    assert.throws(
+      () => recorder.start({ confirmed: true, streams: ["console"], ...options }),
+      (error) => error instanceof DiagnosticError
+    );
+    assert.equal(recorder.state, "idle");
+  }
+});
+
+test("events the recorder could not export are rejected when appended", () => {
+  let now = 0;
+  const recorder = new DiagnosticRecorder({ monotonicNow: () => now });
+  recorder.start({ confirmed: true, streams: ["console", "network"] });
+  now = 5;
+  assert.throws(
+    () => recorder.append("console", "", { message: "no type" }),
+    (error) => error.path === "type"
+  );
+  for (const field of ["status", "durationMs", "sizeBytes"]) {
+    assert.throws(
+      () => recorder.append("network", "request-complete", {
+        url: "https://api.example.test/",
+        [field]: "not a number"
+      }),
+      (error) => error.path === `payload.${field}`
+    );
+  }
+  const event = recorder.append("network", "request-complete", {
+    url: "https://api.example.test/",
+    status: 200
+  });
+  assert.equal(event.id, "event-1");
+  const session = recorder.stop();
+  assert.equal(recorder.state, "stopped");
+  assert.deepEqual(session.events.map((entry) => entry.id), ["event-1"]);
 });
