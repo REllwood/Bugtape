@@ -176,6 +176,16 @@ function renderStreamRemoval() {
   elements.streamRemoval.disabled = false;
 }
 
+function findingLocation(finding) {
+  const place =
+    finding.scope === "title"
+      ? "the report title"
+      : finding.scope === "environment"
+        ? "environment details"
+        : finding.eventId;
+  return finding.part === "key" ? `a field name in ${place}` : place;
+}
+
 function renderFindings() {
   if (findings.length === 0) {
     const message = document.createElement("p");
@@ -192,7 +202,7 @@ function renderFindings() {
       input.value = finding.id;
       const copy = document.createElement("span");
       const title = document.createElement("strong");
-      title.textContent = `${finding.category} in ${finding.eventId}`;
+      title.textContent = `${finding.category} in ${findingLocation(finding)}`;
       const preview = document.createElement("small");
       preview.textContent = finding.preview;
       copy.append(title, preview);

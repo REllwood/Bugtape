@@ -457,18 +457,75 @@ export function buildTimeline(input) {
   );
 }
 
+function passesLuhn(digits) {
+  let sum = 0;
+  for (const [index, digit] of [...digits].reverse().entries()) {
+    let value = Number(digit);
+    if (index % 2 === 1) {
+      value *= 2;
+      if (value > 9) {
+        value -= 9;
+      }
+    }
+    sum += value;
+  }
+  return sum % 10 === 0;
+}
+
+// Visa, Mastercard, American Express and Discover lengths and prefixes, so
+// 13- and 14-digit timestamps or identifiers are not mistaken for cards.
+const cardPrefixes = /^(?:4\d{15}(?:\d{3})?|5[1-5]\d{14}|2[2-7]\d{14}|3[47]\d{13}|6\d{15})$/;
+
 const patterns = [
+  {
+    category: "private-key",
+    expression:
+      /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z]+ )*PRIVATE KEY-----|$)/g
+  },
   {
     category: "bearer-token",
     expression: /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi
+  },
+  {
+    category: "jwt",
+    expression: /\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g
+  },
+  {
+    category: "github-token",
+    expression: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})\b/g
+  },
+  {
+    category: "aws-access-key",
+    expression: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g
+  },
+  {
+    category: "slack-token",
+    expression: /\bxox[abprs]-[A-Za-z0-9-]{10,}/g
+  },
+  {
+    category: "api-key",
+    expression: /\b(?:sk|pk|api)[_-][A-Za-z0-9_-]{12,}\b/gi
+  },
+  {
+    category: "credential",
+    expression:
+      /(?<![A-Za-z0-9])(?:password|passwd|passphrase|secret|token|api[_-]?key)["']?\s*[:=]\s*["']?[^\s"'&,;]{3,}/gi
   },
   {
     category: "email-address",
     expression: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi
   },
   {
-    category: "api-key",
-    expression: /\b(?:sk|pk|api)[_-][A-Za-z0-9_-]{12,}\b/gi
+    category: "card-number",
+    expression: /\b\d(?:[ -]?\d){12,18}\b/g,
+    accept: (match) => {
+      const digits = match.replaceAll(/\D/g, "");
+      return cardPrefixes.test(digits) && passesLuhn(digits);
+    }
+  },
+  {
+    category: "phone-number",
+    expression: /(?<![\w+])\+[1-9]\d{0,2}(?:[ .-]?\d){6,13}(?!\d)|(?<!\d)0[2-478](?:[ -]?\d){8}(?!\d)/g
   },
   {
     category: "url-query",
@@ -476,8 +533,11 @@ const patterns = [
   }
 ];
 
-function displayPayloadPath(segments) {
-  return `payload${segments
+const findingScopes = new Set(["event", "title", "environment"]);
+const findingParts = new Set(["value", "key"]);
+
+function displayPath(root, segments) {
+  return `${root}${segments
     .map((segment) =>
       typeof segment === "number" ? `[${segment}]` : `[${JSON.stringify(segment)}]`
     )
@@ -486,11 +546,7 @@ function displayPayloadPath(segments) {
 
 function stringEntries(value, pathSegments = []) {
   if (typeof value === "string") {
-    return [{
-      path: displayPayloadPath(pathSegments),
-      pathSegments: [...pathSegments],
-      value
-    }];
+    return [{ part: "value", pathSegments: [...pathSegments], value }];
   }
   if (Array.isArray(value)) {
     return value.flatMap((entry, index) =>
@@ -498,9 +554,10 @@ function stringEntries(value, pathSegments = []) {
     );
   }
   if (isRecord(value)) {
-    return Object.entries(value).flatMap(([key, entry]) =>
-      stringEntries(entry, [...pathSegments, key])
-    );
+    return Object.entries(value).flatMap(([key, entry]) => [
+      { part: "key", pathSegments: [...pathSegments, key], value: key },
+      ...stringEntries(entry, [...pathSegments, key])
+    ]);
   }
   return [];
 }
@@ -511,18 +568,49 @@ function maskedPreview(value, start, length) {
   return `${before}[sensitive ${length} chars]${after}`;
 }
 
+function scanTargets(session) {
+  return [
+    {
+      scope: "title",
+      id: "title",
+      eventId: null,
+      root: "title",
+      entries: [{ part: "value", pathSegments: [], value: session.title }]
+    },
+    {
+      scope: "environment",
+      id: "environment",
+      eventId: null,
+      root: "environment",
+      entries: stringEntries(session.environment)
+    },
+    ...session.events.map((event) => ({
+      scope: "event",
+      id: event.id,
+      eventId: event.id,
+      root: "payload",
+      entries: stringEntries(event.payload)
+    }))
+  ];
+}
+
 export function scanSensitiveData(input) {
   const session = validateSession(input);
   const findings = [];
-  for (const event of session.events) {
-    for (const entry of stringEntries(event.payload)) {
+  for (const target of scanTargets(session)) {
+    for (const entry of target.entries) {
       for (const pattern of patterns) {
-        pattern.expression.lastIndex = 0;
         for (const match of entry.value.matchAll(pattern.expression)) {
+          if (pattern.accept && !pattern.accept(match[0])) {
+            continue;
+          }
+          const path = displayPath(target.root, entry.pathSegments);
           findings.push({
-            id: `finding-${event.id}-${findings.length + 1}`,
-            eventId: event.id,
-            path: entry.path,
+            id: `finding-${target.id}-${findings.length + 1}`,
+            scope: target.scope,
+            eventId: target.eventId,
+            part: entry.part,
+            path: entry.part === "key" ? `${path} (field name)` : path,
             pathSegments: [...entry.pathSegments],
             category: pattern.category,
             start: match.index,
@@ -561,6 +649,43 @@ function replaceAtPath(value, segments, replacer) {
     );
   }
   cursor[finalKey] = replacer(cursor[finalKey]);
+}
+
+const REDACTED_FIELD = "[REDACTED-FIELD]";
+
+function redactKeyAtPath(value, segments, replacer) {
+  let parent = value;
+  for (const segment of segments.slice(0, -1)) {
+    parent = isRecord(parent) || Array.isArray(parent) ? parent[segment] : undefined;
+  }
+  const finalKey = segments.at(-1);
+  if (typeof finalKey !== "string" || !isRecord(parent) || !Object.hasOwn(parent, finalKey)) {
+    throw new DiagnosticError(
+      "Redaction path must resolve to a payload field name",
+      "findings.pathSegments",
+      "INVALID_FINDING"
+    );
+  }
+  // The replacer still checks each finding against the original name, but the
+  // new name keeps none of it: a placeholder such as "[REDACTED:api-key]"
+  // would itself trip the capture boundary, so fields get a numbered marker.
+  replacer(finalKey);
+  let renamed = REDACTED_FIELD;
+  for (let suffix = 2; Object.hasOwn(parent, renamed); suffix += 1) {
+    renamed = `${REDACTED_FIELD} ${suffix}`;
+  }
+  const entries = Object.entries(parent);
+  for (const [key] of entries) {
+    delete parent[key];
+  }
+  for (const [key, entry] of entries) {
+    Object.defineProperty(parent, key === finalKey ? renamed : key, {
+      value: entry,
+      enumerable: true,
+      writable: true,
+      configurable: true
+    });
+  }
 }
 
 function redactSpans(text, entries) {
@@ -642,16 +767,26 @@ export function applyReview(
     (event) => !removedEvents.has(event.id) && !removedStreams.has(event.stream)
   );
   const accepted = new Set(redactFindingIds);
-  const groupedByEvent = new Map();
+  const groups = new Map();
   for (const [index, finding] of findings.entries()) {
     if (!accepted.has(finding.id)) {
       continue;
+    }
+    const scope = finding.scope ?? "event";
+    const part = finding.part ?? "value";
+    if (!findingScopes.has(scope) || !findingParts.has(part)) {
+      throw new DiagnosticError(
+        "Finding scope must be event, title or environment, and part must be value or key",
+        `findings.${index}`,
+        "INVALID_FINDING"
+      );
     }
     if (
       !Array.isArray(finding.pathSegments) ||
       finding.pathSegments.some(
         (segment) => typeof segment !== "string" && !Number.isInteger(segment)
-      )
+      ) ||
+      (scope === "title" && (finding.pathSegments.length > 0 || part !== "value"))
     ) {
       throw new DiagnosticError(
         "Finding pathSegments must contain string or integer segments",
@@ -659,25 +794,42 @@ export function applyReview(
         "INVALID_FINDING"
       );
     }
-    const eventGroups = groupedByEvent.get(finding.eventId) ?? new Map();
-    const pathKey = JSON.stringify(finding.pathSegments);
-    const group = eventGroups.get(pathKey) ?? {
+    const groupKey = JSON.stringify([scope, finding.eventId, part, finding.pathSegments]);
+    const group = groups.get(groupKey) ?? {
+      scope,
+      eventId: finding.eventId,
+      part,
       pathSegments: [...finding.pathSegments],
       findings: []
     };
     group.findings.push({ finding, index });
-    eventGroups.set(pathKey, group);
-    groupedByEvent.set(finding.eventId, eventGroups);
+    groups.set(groupKey, group);
   }
-  for (const [eventId, eventGroups] of groupedByEvent) {
-    const event = reviewed.events.find((entry) => entry.id === eventId);
-    if (!event) {
+  const eventsById = new Map(reviewed.events.map((event) => [event.id, event]));
+  // Values are redacted before any field is renamed, and deeper fields are
+  // renamed before their parents, so every path still resolves when used.
+  const ordered = [...groups.values()].sort(
+    (left, right) =>
+      (left.part === "key") - (right.part === "key") ||
+      right.pathSegments.length - left.pathSegments.length
+  );
+  for (const group of ordered) {
+    const redact = (text) => redactSpans(text, group.findings);
+    if (group.scope === "title") {
+      reviewed.title = redact(reviewed.title);
       continue;
     }
-    for (const group of eventGroups.values()) {
-      replaceAtPath(event.payload, group.pathSegments, (text) =>
-        redactSpans(text, group.findings)
-      );
+    const container =
+      group.scope === "environment"
+        ? reviewed.environment
+        : eventsById.get(group.eventId)?.payload;
+    if (container === undefined) {
+      continue;
+    }
+    if (group.part === "key") {
+      redactKeyAtPath(container, group.pathSegments, redact);
+    } else {
+      replaceAtPath(container, group.pathSegments, redact);
     }
   }
   return validateSession(reviewed);
