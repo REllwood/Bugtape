@@ -489,6 +489,50 @@ function replaceAtPath(value, segments, replacer) {
   cursor[finalKey] = replacer(cursor[finalKey]);
 }
 
+function redactSpans(text, entries) {
+  for (const { finding, index } of entries) {
+    if (
+      !Number.isInteger(finding.start) ||
+      !Number.isInteger(finding.length) ||
+      finding.start < 0 ||
+      finding.length <= 0 ||
+      finding.start + finding.length > text.length
+    ) {
+      throw new DiagnosticError(
+        "Finding start and length must fall within the value it redacts",
+        `findings.${index}`,
+        "INVALID_FINDING"
+      );
+    }
+  }
+  // Overlapping findings (an email inside a URL, a key inside a query string)
+  // are merged first, so replacing one never shifts the offsets of another.
+  const spans = [];
+  for (const { finding } of [...entries].sort(
+    (left, right) => left.finding.start - right.finding.start
+  )) {
+    const end = finding.start + finding.length;
+    const category = String(finding.category);
+    const previous = spans.at(-1);
+    if (previous && finding.start < previous.end) {
+      previous.end = Math.max(previous.end, end);
+      if (!previous.categories.includes(category)) {
+        previous.categories.push(category);
+      }
+    } else {
+      spans.push({ start: finding.start, end, categories: [category] });
+    }
+  }
+  let result = text;
+  for (const span of spans.reverse()) {
+    result =
+      result.slice(0, span.start) +
+      `[REDACTED:${span.categories.join(",")}]` +
+      result.slice(span.end);
+  }
+  return result;
+}
+
 export function mergeReviewPolicy(...policies) {
   const merged = {
     redactFindingIds: new Set(),
@@ -547,7 +591,7 @@ export function applyReview(
       pathSegments: [...finding.pathSegments],
       findings: []
     };
-    group.findings.push(finding);
+    group.findings.push({ finding, index });
     eventGroups.set(pathKey, group);
     groupedByEvent.set(finding.eventId, eventGroups);
   }
@@ -557,18 +601,9 @@ export function applyReview(
       continue;
     }
     for (const group of eventGroups.values()) {
-      replaceAtPath(event.payload, group.pathSegments, (text) => {
-        let result = text;
-        for (const finding of [...group.findings].sort(
-          (left, right) => right.start - left.start
-        )) {
-          result =
-            result.slice(0, finding.start) +
-            `[REDACTED:${finding.category}]` +
-            result.slice(finding.start + finding.length);
-        }
-        return result;
-      });
+      replaceAtPath(event.payload, group.pathSegments, (text) =>
+        redactSpans(text, group.findings)
+      );
     }
   }
   return validateSession(reviewed);
