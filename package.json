@@ -6,11 +6,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/REllwood/bugtape.git"
+    "url": "git+https://github.com/REllwood/Bugtape.git"
   },
-  "homepage": "https://github.com/REllwood/bugtape#readme",
+  "homepage": "https://github.com/REllwood/Bugtape#readme",
   "bugs": {
-    "url": "https://github.com/REllwood/bugtape/issues"
+    "url": "https://github.com/REllwood/Bugtape/issues"
   },
   "type": "module",
   "engines": {

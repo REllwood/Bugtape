@@ -25,8 +25,8 @@ A screen recording shows a bug happening but not why. Bugtape puts clicks, conso
 Requires Node.js 22 or newer. No `npm install` needed.
 
 ```sh
-git clone https://github.com/REllwood/bugtape.git
-cd bugtape
+git clone https://github.com/REllwood/Bugtape.git
+cd Bugtape
 npm start
 ```
 
