@@ -256,6 +256,19 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.finding-list em {
+  color: #7f2d19;
+  display: block;
+  font-size: 0.75rem;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.hint {
+  color: #59625e;
+  font-size: 0.82rem;
+}
+
 .export-desk {
   background: #d8dcd7;
 }

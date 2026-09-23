@@ -1,5 +1,6 @@
 import {
   DiagnosticRecorder,
+  MAX_SESSION_DURATION_MS,
   applyReview,
   buildTimeline,
   createMarkdownReport,
@@ -28,6 +29,7 @@ const elements = {
   eventCount: document.querySelector("#event-count"),
   scan: document.querySelector("#scan-button"),
   applyReview: document.querySelector("#apply-review"),
+  resetReview: document.querySelector("#reset-review"),
   reviewStatus: document.querySelector("#review-status"),
   findings: document.querySelector("#finding-list"),
   streamRemoval: document.querySelector("#stream-removal"),
@@ -35,6 +37,14 @@ const elements = {
   markdown: document.querySelector("#markdown-button"),
   output: document.querySelector("#report-output")
 };
+
+const streamControls = [
+  [elements.click, "interactions"],
+  [elements.network, "network"],
+  [elements.console, "console"],
+  [elements.markerText, "markers"],
+  [elements.marker, "markers"]
+];
 
 let recorder;
 let draft;
@@ -45,6 +55,14 @@ let indicatorTimer;
 
 function nextPaint() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function plural(count, noun) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function setReviewStatus(message, loading = false) {
@@ -59,7 +77,7 @@ async function withLoading(label, operation) {
     return await operation();
   } catch (error) {
     setReviewStatus(
-      `Could not complete the action: ${error instanceof Error ? error.message : String(error)}. The draft remains available.`,
+      `Could not complete the action: ${errorMessage(error)}.${draft ? " The draft remains available." : ""}`,
       false
     );
     throw error;
@@ -76,19 +94,17 @@ function elapsedText() {
 }
 
 function setCaptureControls(active, paused = false) {
+  const enabledStreams = active ? recorder.snapshot().streams : [];
   elements.start.disabled = active;
   elements.sample.disabled = active;
+  elements.streams.disabled = active;
+  elements.confirm.disabled = active;
   elements.pause.disabled = !active;
   elements.pause.textContent = paused ? "Resume" : "Pause";
   elements.stop.disabled = !active;
-  for (const control of [
-    elements.click,
-    elements.network,
-    elements.console,
-    elements.markerText,
-    elements.marker
-  ]) {
-    control.disabled = !active || paused;
+  for (const [control, stream] of streamControls) {
+    control.disabled =
+      !active || paused || (stream !== "markers" && !enabledStreams.includes(stream));
   }
 }
 
@@ -97,6 +113,11 @@ function startIndicator() {
   elements.indicator.dataset.active = "true";
   indicatorTimer = setInterval(() => {
     const state = recorder?.state;
+    if (state === "recording" && recorder.snapshot().durationMs >= MAX_SESSION_DURATION_MS) {
+      clearInterval(indicatorTimer);
+      finishRecording("Recording reached its one-hour limit and stopped");
+      return;
+    }
     elements.indicator.textContent =
       state === "paused"
         ? `Recording paused at ${elapsedText()}. Resume or stop to continue.`
@@ -110,9 +131,23 @@ function stopIndicator(message) {
   elements.indicator.textContent = message;
 }
 
-function renderTimeline(session) {
+function renderEmptyTimeline(message) {
+  const item = document.createElement("li");
+  item.className = "empty-state";
+  item.textContent = message;
+  elements.timeline.replaceChildren(item);
+  elements.eventCount.textContent = plural(0, "event");
+}
+
+function renderTimeline(session, { removable = true } = {}) {
   const events = buildTimeline(session);
-  elements.eventCount.textContent = `${events.length} event${events.length === 1 ? "" : "s"}`;
+  if (events.length === 0) {
+    renderEmptyTimeline(
+      removable ? "No events in this session." : "Events appear here as they are recorded."
+    );
+    return;
+  }
+  elements.eventCount.textContent = plural(events.length, "event");
   elements.timeline.replaceChildren(
     ...events.map((event) => {
       const item = document.createElement("li");
@@ -123,41 +158,71 @@ function renderTimeline(session) {
       stream.textContent = event.stream;
       const summary = document.createElement("span");
       summary.textContent = describeEvent(event);
-      const removeLabel = document.createElement("label");
-      removeLabel.className = "remove-event";
-      const remove = document.createElement("input");
-      remove.type = "checkbox";
-      remove.dataset.removeEvent = event.id;
-      removeLabel.append(remove, " Remove from export");
-      item.append(time, stream, summary, removeLabel);
+      item.append(time, stream, summary);
+      if (removable) {
+        const removeLabel = document.createElement("label");
+        removeLabel.className = "remove-event";
+        const remove = document.createElement("input");
+        remove.type = "checkbox";
+        remove.dataset.removeEvent = event.id;
+        removeLabel.append(remove, " Remove from export");
+        item.append(removeLabel);
+      }
       return item;
     })
   );
 }
 
-function prepareDraft(session) {
-  draft = validateSession(session);
+function setReviewControls() {
+  elements.scan.disabled = !draft;
+  elements.applyReview.disabled = !draft || elements.findings.childElementCount === 0;
+  elements.resetReview.disabled = !reviewed;
+  elements.json.disabled = !reviewed;
+  elements.markdown.disabled = !reviewed;
+}
+
+function clearDraft(timelineMessage) {
+  draft = undefined;
   reviewed = undefined;
   findings = [];
   reviewPolicy = mergeReviewPolicy();
   elements.findings.replaceChildren();
   elements.output.value = "";
-  elements.scan.disabled = false;
-  elements.applyReview.disabled = true;
-  elements.json.disabled = true;
-  elements.markdown.disabled = true;
+  renderEmptyTimeline(timelineMessage);
+  renderStreamRemoval();
+  setReviewControls();
+}
+
+function prepareDraft(session) {
+  const next = validateSession(session);
+  clearDraft("");
+  draft = next;
   renderTimeline(draft);
   renderStreamRemoval();
+  setReviewControls();
+}
+
+function draftStreams() {
+  // Markers are always recordable, so they may appear in events without
+  // being listed among the streams chosen before recording.
+  return [...new Set([...draft.streams, ...draft.events.map((event) => event.stream)])];
 }
 
 function renderStreamRemoval() {
   const legend = elements.streamRemoval.querySelector("legend");
   elements.streamRemoval.replaceChildren(legend);
-  for (const stream of draft.streams) {
+  if (!draft) {
+    elements.streamRemoval.disabled = true;
+    return;
+  }
+  const removed = new Set(reviewPolicy.removeStreams);
+  for (const stream of draftStreams()) {
     const label = document.createElement("label");
     const input = document.createElement("input");
     input.type = "checkbox";
     input.value = stream;
+    input.checked = removed.has(stream);
+    input.disabled = removed.has(stream);
     label.append(input, ` Remove ${stream}`);
     elements.streamRemoval.append(label);
   }
@@ -181,32 +246,71 @@ function renderFindings() {
     elements.findings.replaceChildren(message);
     return;
   }
+  const redacted = new Set(reviewPolicy.redactFindingIds);
   elements.findings.replaceChildren(
     ...findings.map((finding) => {
       const label = document.createElement("label");
       const input = document.createElement("input");
       input.type = "checkbox";
-      input.checked = true;
       input.value = finding.id;
+      // Once a review is applied the list mirrors the report copy: redactions
+      // already made stay locked until the review is started again.
+      input.checked = reviewed ? redacted.has(finding.id) : true;
+      input.disabled = redacted.has(finding.id);
       const copy = document.createElement("span");
       const title = document.createElement("strong");
       title.textContent = `${finding.category} in ${findingLocation(finding)}`;
       const preview = document.createElement("small");
       preview.textContent = finding.preview;
       copy.append(title, preview);
+      if (input.disabled) {
+        const note = document.createElement("em");
+        note.textContent = "Redacted in the report copy";
+        copy.append(note);
+      }
       label.append(input, copy);
       return label;
     })
   );
 }
 
+function record(append) {
+  try {
+    append();
+    renderTimeline(recorder.snapshot(), { removable: false });
+  } catch (error) {
+    setReviewStatus(`Could not record the event: ${errorMessage(error)}.`, false);
+  }
+}
+
+async function finishRecording(reason) {
+  elements.stop.disabled = true;
+  try {
+    await withLoading("Finalising the synchronised event index", async () => {
+      await nextPaint();
+      prepareDraft(recorder.stop());
+      setCaptureControls(false);
+      elements.confirm.checked = false;
+      stopIndicator(`${reason} at ${elapsedText()}. The local draft is ready for review.`);
+    });
+    setReviewStatus("Draft ready. Scan and inspect every stream before export.", false);
+  } catch {
+    elements.stop.disabled = false;
+  }
+}
+
+elements.streams.addEventListener("change", () => {
+  // Confirmation covers one specific selection of streams.
+  elements.confirm.checked = false;
+});
+
 elements.start.addEventListener("click", async () => {
   elements.start.disabled = true;
   try {
     await withLoading("Starting the local recorder", async () => {
       await new Promise((resolve) => setTimeout(resolve, 120));
-      recorder = new DiagnosticRecorder();
-      recorder.start({
+      const next = new DiagnosticRecorder();
+      next.start({
         confirmed: elements.confirm.checked,
         streams: selectedStreams(),
         environment: {
@@ -215,8 +319,8 @@ elements.start.addEventListener("click", async () => {
           platform: navigator.platform || "browser"
         }
       });
-      draft = undefined;
-      reviewed = undefined;
+      recorder = next;
+      clearDraft("Events appear here as they are recorded.");
       setCaptureControls(true);
       startIndicator();
     });
@@ -236,50 +340,45 @@ elements.pause.addEventListener("click", () => {
   }
 });
 
-elements.stop.addEventListener("click", async () => {
-  elements.stop.disabled = true;
-  try {
-    await withLoading("Finalising the synchronised event index", async () => {
-      await nextPaint();
-      prepareDraft(recorder.stop());
-      setCaptureControls(false);
-      stopIndicator(`Recording stopped at ${elapsedText()}. The local draft is ready for review.`);
-    });
-    setReviewStatus("Draft ready. Scan and inspect every stream before export.", false);
-  } catch {
-    elements.stop.disabled = false;
-  }
+elements.stop.addEventListener("click", () => {
+  finishRecording("Recording stopped");
 });
 
 elements.click.addEventListener("click", () => {
-  recorder.append("interactions", "click", {
-    target: "Place order button",
-    category: "button",
-    valueCaptured: false
-  });
+  record(() =>
+    recorder.append("interactions", "click", {
+      target: "Place order button",
+      category: "button",
+      valueCaptured: false
+    })
+  );
 });
 
 elements.network.addEventListener("click", () => {
-  recorder.append("network", "request-complete", {
-    url: "https://api.example.test/checkout?customer=not-captured",
-    method: "POST",
-    status: 422,
-    durationMs: 2488,
-    sizeBytes: 612,
-    headers: { authorisation: "not captured" },
-    body: "not captured"
-  });
+  record(() =>
+    recorder.append("network", "request-complete", {
+      url: "https://api.example.test/checkout?customer=not-captured",
+      method: "POST",
+      status: 422,
+      durationMs: 2488,
+      sizeBytes: 612,
+      headers: { authorisation: "not captured" },
+      body: "not captured"
+    })
+  );
 });
 
 elements.console.addEventListener("click", () => {
-  recorder.append("console", "error", {
-    level: "error",
-    message: "Validation failed for reporter@example.test with Bearer local_fixture_token_123456789"
-  });
+  record(() =>
+    recorder.append("console", "error", {
+      level: "error",
+      message: "Validation failed for reporter@example.test with Bearer local_fixture_token_123456789"
+    })
+  );
 });
 
 elements.marker.addEventListener("click", () => {
-  recorder.marker(elements.markerText.value || "Unlabelled marker");
+  record(() => recorder.marker(elements.markerText.value || "Unlabelled marker"));
 });
 
 elements.sample.addEventListener("click", async () => {
@@ -308,16 +407,15 @@ elements.scan.addEventListener("click", async () => {
       await nextPaint();
       findings = scanSensitiveData(draft);
       renderFindings();
-      elements.applyReview.disabled = false;
     });
     setReviewStatus(
-      `Scan complete: ${findings.length} finding${findings.length === 1 ? "" : "s"}. Checked findings will be redacted.`,
+      `Scan complete: ${plural(findings.length, "finding")}. Checked findings will be redacted.`,
       false
     );
   } catch {
     // withLoading has supplied a recoverable message.
   } finally {
-    elements.scan.disabled = false;
+    setReviewControls();
   }
 });
 
@@ -335,26 +433,44 @@ elements.applyReview.addEventListener("click", async () => {
       const removeStreams = [
         ...elements.streamRemoval.querySelectorAll("input:checked")
       ].map((input) => input.value);
-      reviewPolicy = mergeReviewPolicy(reviewPolicy, {
+      const nextPolicy = mergeReviewPolicy(reviewPolicy, {
         redactFindingIds,
         removeEventIds,
         removeStreams
       });
       reviewed = applyReview(draft, {
         findings,
-        ...reviewPolicy
+        ...nextPolicy
       });
+      reviewPolicy = nextPolicy;
       renderTimeline(reviewed);
-      elements.json.disabled = false;
-      elements.markdown.disabled = false;
+      renderFindings();
+      renderStreamRemoval();
       elements.output.value = "";
     });
-    setReviewStatus("Derived report copy ready. The original local draft remains unchanged.", false);
+    const removedEvents = draft.events.length - reviewed.events.length;
+    setReviewStatus(
+      `Derived report copy ready: ${plural(reviewPolicy.redactFindingIds.length, "redaction")}, ${plural(removedEvents, "event")} removed. The original local draft remains unchanged.`,
+      false
+    );
   } catch {
     // withLoading has supplied a recoverable message.
   } finally {
-    elements.applyReview.disabled = false;
+    setReviewControls();
   }
+});
+
+elements.resetReview.addEventListener("click", () => {
+  reviewed = undefined;
+  reviewPolicy = mergeReviewPolicy();
+  elements.output.value = "";
+  renderTimeline(draft);
+  if (elements.findings.childElementCount > 0) {
+    renderFindings();
+  }
+  renderStreamRemoval();
+  setReviewControls();
+  setReviewStatus("Review cleared. Every finding, event and stream is back in the draft.", false);
 });
 
 elements.json.addEventListener("click", async () => {
@@ -370,7 +486,7 @@ elements.json.addEventListener("click", async () => {
   } catch {
     // withLoading has supplied a recoverable message.
   } finally {
-    elements.json.disabled = false;
+    setReviewControls();
   }
 });
 
@@ -385,8 +501,9 @@ elements.markdown.addEventListener("click", async () => {
   } catch {
     // withLoading has supplied a recoverable message.
   } finally {
-    elements.markdown.disabled = false;
+    setReviewControls();
   }
 });
 
 setCaptureControls(false);
+setReviewControls();
