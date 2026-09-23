@@ -835,7 +835,7 @@ export function applyReview(
   return validateSession(reviewed);
 }
 
-function eventSummary(event) {
+export function describeEvent(event) {
   if (event.stream === "network") {
     return `${event.payload.method} ${event.payload.host} → ${event.payload.status} in ${event.payload.durationMs} ms`;
   }
@@ -925,7 +925,7 @@ export function createMarkdownReport(input) {
   ];
   for (const event of buildTimeline(session)) {
     lines.push(
-      `- ${event.atMs.toFixed(0)} ms — ${markdownSafe(eventSummary(event))}`
+      `- ${event.atMs.toFixed(0)} ms — ${markdownSafe(describeEvent(event))}`
     );
   }
   lines.push(
