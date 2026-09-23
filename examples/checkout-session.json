@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "id": "checkout-validation-failure",
+  "title": "Checkout validation fails after Save",
+  "startedAt": "2026-07-24T02:14:03.000Z",
+  "durationMs": 6420,
+  "clock": {
+    "type": "monotonic-relative",
+    "startedMonotonicMs": 800,
+    "stoppedMonotonicMs": 7220
+  },
+  "streams": ["interactions", "console", "network", "markers"],
+  "environment": {
+    "browser": "Local fixture browser 1",
+    "viewport": "1280×800",
+    "platform": "Synthetic local fixture"
+  },
+  "events": [
+    {
+      "id": "event-1",
+      "sequence": 1,
+      "stream": "interactions",
+      "type": "click",
+      "atMs": 420,
+      "payload": { "target": "Place order button", "category": "button", "valueCaptured": false }
+    },
+    {
+      "id": "event-2",
+      "sequence": 2,
+      "stream": "network",
+      "type": "request-complete",
+      "atMs": 2910,
+      "payload": { "method": "POST", "host": "api.example.test", "status": 422, "durationMs": 2488, "sizeBytes": 612 }
+    },
+    {
+      "id": "event-3",
+      "sequence": 3,
+      "stream": "console",
+      "type": "error",
+      "atMs": 2940,
+      "payload": { "level": "error", "message": "Validation failed for reporter@example.test with Bearer local_fixture_token_123456789" }
+    },
+    {
+      "id": "event-4",
+      "sequence": 4,
+      "stream": "markers",
+      "type": "written-marker",
+      "atMs": 3500,
+      "payload": { "label": "Save remained disabled after validation response" }
+    }
+  ]
+}

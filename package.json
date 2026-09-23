@@ -1,0 +1,25 @@
+{
+  "name": "bugtape",
+  "version": "0.1.0",
+  "description": "A privacy-conscious browser flight recorder for bug reports people can replay.",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/REllwood/bugtape.git"
+  },
+  "homepage": "https://github.com/REllwood/bugtape#readme",
+  "bugs": {
+    "url": "https://github.com/REllwood/bugtape/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "check:syntax": "node --check src/diagnostics.js && node --check src/server.js && node --check public/app.js",
+    "check": "npm test && npm run check:syntax"
+  }
+}

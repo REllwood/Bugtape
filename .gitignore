@@ -1,0 +1,13 @@
+node_modules/
+.DS_Store
+coverage/
+*.log
+*.bugtape.json
+
+# local-only planning and tooling
+/docs/
+.claude/
+.agents/
+.forge/
+.planning/
+.preview/

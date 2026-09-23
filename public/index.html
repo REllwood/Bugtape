@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en-AU">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bugtape local diagnostic recorder</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="kicker">Local diagnostic flight recorder</p>
+        <h1>Bugtape</h1>
+      </div>
+      <p class="scope-label">Web prototype · no browser extension capture</p>
+    </header>
+
+    <main>
+      <section class="capture-desk" aria-labelledby="capture-heading">
+        <div>
+          <p class="section-number">01 / Consent and capture</p>
+          <h2 id="capture-heading">Choose diagnostic streams</h2>
+        </div>
+        <p>This local prototype records only events added inside this page. It cannot observe other tabs, the browser console or browser network traffic.</p>
+        <fieldset id="stream-fields">
+          <legend>Enabled stream inventory</legend>
+          <label><input type="checkbox" value="interactions" checked> Interaction categories, never form values</label>
+          <label><input type="checkbox" value="console" checked> Deliberately entered console examples</label>
+          <label><input type="checkbox" value="network" checked> Method, host, status, timing and size metadata</label>
+        </fieldset>
+        <label class="confirmation"><input id="confirm-streams" type="checkbox"> I have reviewed and confirm these streams</label>
+        <div class="button-row">
+          <button id="start-button" type="button">Start local recording</button>
+          <button id="pause-button" class="secondary" type="button" disabled>Pause</button>
+          <button id="stop-button" class="secondary" type="button" disabled>Stop and review</button>
+          <button id="sample-button" class="secondary" type="button">Load checkout fixture</button>
+        </div>
+        <div id="recording-indicator" class="recording-indicator" role="status" aria-live="polite">Recorder inactive.</div>
+
+        <div class="event-controls" aria-labelledby="event-controls-heading">
+          <h3 id="event-controls-heading">Reproduction controls</h3>
+          <button id="add-click" type="button" disabled>Record Place order click</button>
+          <button id="add-network" type="button" disabled>Record 422 network metadata</button>
+          <button id="add-console" type="button" disabled>Record console exception</button>
+          <label for="marker-text">Written marker</label>
+          <div class="marker-row">
+            <input id="marker-text" type="text" maxlength="120" value="Save remained disabled" disabled>
+            <button id="add-marker" type="button" disabled>Add marker</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="timeline-desk" aria-labelledby="timeline-heading">
+        <header>
+          <div>
+            <p class="section-number">02 / Synchronised evidence</p>
+            <h2 id="timeline-heading">Diagnostic timeline</h2>
+          </div>
+          <p id="event-count">0 events</p>
+        </header>
+        <ol id="timeline" class="timeline">
+          <li class="empty-state">Record or import a session to inspect its timeline.</li>
+        </ol>
+      </section>
+
+      <section class="review-desk" aria-labelledby="review-heading">
+        <div>
+          <p class="section-number">03 / Privacy review</p>
+          <h2 id="review-heading">Redact before sharing</h2>
+        </div>
+        <p>Scanning is pattern-based evidence, not a guarantee that every sensitive value will be found. Network bodies, headers, cookies, query strings and form values are excluded by construction.</p>
+        <div class="button-row">
+          <button id="scan-button" type="button" disabled>Scan for sensitive data</button>
+          <button id="apply-review" class="secondary" type="button" disabled>Apply review to derived copy</button>
+        </div>
+        <div id="review-status" class="operation-status" role="status" aria-live="polite">No draft is ready for review.</div>
+        <div id="finding-list" class="finding-list"></div>
+        <fieldset id="stream-removal" disabled>
+          <legend>Remove an entire stream from export</legend>
+        </fieldset>
+      </section>
+
+      <section class="export-desk" aria-labelledby="export-heading">
+        <div>
+          <p class="section-number">04 / Report export</p>
+          <h2 id="export-heading">Portable evidence</h2>
+        </div>
+        <div class="button-row">
+          <button id="json-button" type="button" disabled>Prepare JSON report</button>
+          <button id="markdown-button" class="secondary" type="button" disabled>Prepare Markdown summary</button>
+        </div>
+        <label for="report-output">Sanitised report output</label>
+        <textarea id="report-output" rows="18" readonly></textarea>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
