@@ -185,6 +185,16 @@ textarea {
   width: 100%;
 }
 
+.field-label {
+  display: block;
+  font-weight: 700;
+  margin: 1rem 0 0.3rem;
+}
+
+.output-actions {
+  margin-top: 0.75rem;
+}
+
 .marker-row {
   display: grid;
   gap: 0.5rem;
