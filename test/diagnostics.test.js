@@ -148,6 +148,67 @@ test("structured redaction paths preserve colons and dotted property names", () 
   );
 });
 
+function consoleSession(message) {
+  const session = structuredClone(fixture);
+  session.events = [structuredClone(fixture.events[2])];
+  session.events[0].payload = { level: "error", message };
+  return session;
+}
+
+test("overlapping findings are redacted as one span without leaking text", () => {
+  const session = consoleSession(
+    "see https://api.test/reset?email=bob@ex.co&token=SUPERSECRET99 now"
+  );
+  const findings = scanSensitiveData(session);
+  assert.deepEqual(
+    findings.map((finding) => finding.category).sort(),
+    ["email-address", "url-query"]
+  );
+  const reviewed = applyReview(session, { findings });
+  assert.equal(
+    reviewed.events[0].payload.message,
+    "see [REDACTED:url-query,email-address] now"
+  );
+});
+
+test("a long match inside a shorter placeholder keeps the text that follows", () => {
+  const session = consoleSession(
+    `https://x.test/?k=sk_${"A".repeat(40)} trailing context kept`
+  );
+  const reviewed = applyReview(session);
+  assert.equal(
+    reviewed.events[0].payload.message,
+    "[REDACTED:url-query,api-key] trailing context kept"
+  );
+});
+
+test("only accepted findings are redacted when findings overlap", () => {
+  const session = consoleSession("see https://api.test/reset?email=bob@ex.co now");
+  const findings = scanSensitiveData(session);
+  const email = findings.find((finding) => finding.category === "email-address");
+  const reviewed = applyReview(session, { findings, redactFindingIds: [email.id] });
+  assert.equal(
+    reviewed.events[0].payload.message,
+    "see https://api.test/reset?email=[REDACTED:email-address] now"
+  );
+});
+
+test("findings that do not fit the value they redact are rejected", () => {
+  const session = consoleSession("short");
+  const findings = [{
+    id: "stale",
+    eventId: session.events[0].id,
+    pathSegments: ["message"],
+    category: "email-address",
+    start: 2,
+    length: 40
+  }];
+  assert.throws(
+    () => applyReview(session, { findings }),
+    (error) => error.code === "INVALID_FINDING" && error.path === "findings.0"
+  );
+});
+
 test("portable and Markdown reports disclose privacy limits", () => {
   const reviewed = applyReview(fixture);
   const report = createPortableReport(reviewed);
