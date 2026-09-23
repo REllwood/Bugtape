@@ -9,6 +9,7 @@ import {
   buildTimeline,
   createMarkdownReport,
   createPortableReport,
+  describeEvent,
   mergeReviewPolicy,
   scanSensitiveData,
   validateReport,
@@ -444,6 +445,19 @@ test("the recorder rejects excluded environment fields before it starts", () => 
       error.path === "environment.nested.cookies"
   );
   assert.equal(recorder.state, "idle");
+});
+
+test("every stream has one shared plain-language event summary", () => {
+  assert.deepEqual(buildTimeline(fixture).map(describeEvent), [
+    "click: Place order button",
+    "POST api.example.test → 422 in 2488 ms",
+    "error: Validation failed for reporter@example.test with Bearer local_fixture_token_123456789",
+    "marker: Save remained disabled after validation response"
+  ]);
+  assert.equal(
+    describeEvent({ stream: "custom", type: "heartbeat", payload: {} }),
+    "heartbeat"
+  );
 });
 
 test("Markdown reports neutralise active Markdown supplied by a recording", () => {

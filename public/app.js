@@ -4,6 +4,7 @@ import {
   buildTimeline,
   createMarkdownReport,
   createPortableReport,
+  describeEvent,
   mergeReviewPolicy,
   scanSensitiveData,
   validateReport,
@@ -109,19 +110,6 @@ function stopIndicator(message) {
   elements.indicator.textContent = message;
 }
 
-function summaryFor(event) {
-  if (event.stream === "network") {
-    return `${event.payload.method} ${event.payload.host} returned ${event.payload.status}`;
-  }
-  if (event.stream === "console") {
-    return `${event.payload.level ?? "log"}: ${event.payload.message ?? "No message"}`;
-  }
-  if (event.stream === "interactions") {
-    return `${event.type}: ${event.payload.target ?? "unnamed control"}`;
-  }
-  return event.payload.label ?? event.type;
-}
-
 function renderTimeline(session) {
   const events = buildTimeline(session);
   elements.eventCount.textContent = `${events.length} event${events.length === 1 ? "" : "s"}`;
@@ -134,7 +122,7 @@ function renderTimeline(session) {
       const stream = document.createElement("strong");
       stream.textContent = event.stream;
       const summary = document.createElement("span");
-      summary.textContent = summaryFor(event);
+      summary.textContent = describeEvent(event);
       const removeLabel = document.createElement("label");
       removeLabel.className = "remove-event";
       const remove = document.createElement("input");
