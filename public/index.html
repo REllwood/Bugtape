@@ -28,12 +28,16 @@
           <label><input type="checkbox" value="console" checked> Deliberately entered console examples</label>
           <label><input type="checkbox" value="network" checked> Method, host, status, timing and size metadata</label>
         </fieldset>
+        <label for="title-text" class="field-label">Report title</label>
+        <input id="title-text" type="text" maxlength="120" value="Diagnostic reproduction">
         <label class="confirmation"><input id="confirm-streams" type="checkbox"> I have reviewed and confirm these streams</label>
         <div class="button-row">
           <button id="start-button" type="button">Start local recording</button>
           <button id="pause-button" class="secondary" type="button" disabled>Pause</button>
           <button id="stop-button" class="secondary" type="button" disabled>Stop and review</button>
           <button id="sample-button" class="secondary" type="button">Load checkout fixture</button>
+          <button id="import-button" class="secondary" type="button">Import saved session</button>
+          <input id="import-file" type="file" accept=".json,application/json" hidden>
         </div>
         <div id="recording-indicator" class="recording-indicator" role="status" aria-live="polite">Recorder inactive.</div>
 
@@ -93,6 +97,10 @@
         </div>
         <label for="report-output">Sanitised report output</label>
         <textarea id="report-output" rows="18" readonly></textarea>
+        <div class="button-row output-actions">
+          <button id="download-button" type="button" disabled>Download</button>
+          <button id="copy-button" class="secondary" type="button" disabled>Copy to clipboard</button>
+        </div>
       </section>
     </main>
 

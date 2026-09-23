@@ -6,6 +6,7 @@ import {
   createMarkdownReport,
   createPortableReport,
   describeEvent,
+  importSession,
   mergeReviewPolicy,
   scanSensitiveData,
   validateReport,
@@ -19,6 +20,9 @@ const elements = {
   pause: document.querySelector("#pause-button"),
   stop: document.querySelector("#stop-button"),
   sample: document.querySelector("#sample-button"),
+  title: document.querySelector("#title-text"),
+  importButton: document.querySelector("#import-button"),
+  importFile: document.querySelector("#import-file"),
   indicator: document.querySelector("#recording-indicator"),
   click: document.querySelector("#add-click"),
   network: document.querySelector("#add-network"),
@@ -35,8 +39,13 @@ const elements = {
   streamRemoval: document.querySelector("#stream-removal"),
   json: document.querySelector("#json-button"),
   markdown: document.querySelector("#markdown-button"),
-  output: document.querySelector("#report-output")
+  output: document.querySelector("#report-output"),
+  download: document.querySelector("#download-button"),
+  copy: document.querySelector("#copy-button")
 };
+
+// Comfortably above the largest valid session (5,000 events of 20 KB each).
+const MAX_IMPORT_BYTES = 128 * 1024 * 1024;
 
 const streamControls = [
   [elements.click, "interactions"],
@@ -52,6 +61,7 @@ let reviewed;
 let findings = [];
 let reviewPolicy = mergeReviewPolicy();
 let indicatorTimer;
+let outputKind;
 
 function nextPaint() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
@@ -97,6 +107,8 @@ function setCaptureControls(active, paused = false) {
   const enabledStreams = active ? recorder.snapshot().streams : [];
   elements.start.disabled = active;
   elements.sample.disabled = active;
+  elements.importButton.disabled = active;
+  elements.title.disabled = active;
   elements.streams.disabled = active;
   elements.confirm.disabled = active;
   elements.pause.disabled = !active;
@@ -179,6 +191,8 @@ function setReviewControls() {
   elements.resetReview.disabled = !reviewed;
   elements.json.disabled = !reviewed;
   elements.markdown.disabled = !reviewed;
+  elements.download.disabled = elements.output.value === "";
+  elements.copy.disabled = elements.output.value === "";
 }
 
 function clearDraft(timelineMessage) {
@@ -313,6 +327,7 @@ elements.start.addEventListener("click", async () => {
       next.start({
         confirmed: elements.confirm.checked,
         streams: selectedStreams(),
+        title: elements.title.value.trim() || "Diagnostic reproduction",
         environment: {
           browser: navigator.userAgent,
           viewport: `${window.innerWidth}×${window.innerHeight}`,
@@ -400,6 +415,40 @@ elements.sample.addEventListener("click", async () => {
   }
 });
 
+elements.importButton.addEventListener("click", () => {
+  elements.importFile.click();
+});
+
+elements.importFile.addEventListener("change", async () => {
+  const [file] = elements.importFile.files;
+  // Clearing the value lets the same file be chosen again after a fix.
+  elements.importFile.value = "";
+  if (!file) {
+    return;
+  }
+  elements.importButton.disabled = true;
+  try {
+    await withLoading(`Importing and validating ${file.name}`, async () => {
+      if (file.size > MAX_IMPORT_BYTES) {
+        throw new Error(`${file.name} is larger than any valid Bugtape session`);
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch {
+        throw new Error(`${file.name} is not valid JSON`);
+      }
+      prepareDraft(importSession(parsed));
+      stopIndicator(`Imported ${file.name} ready for review.`);
+    });
+    setReviewStatus("Session imported. Run the sensitive-data scan before export.", false);
+  } catch {
+    // withLoading has supplied a recoverable message.
+  } finally {
+    elements.importButton.disabled = false;
+  }
+});
+
 elements.scan.addEventListener("click", async () => {
   elements.scan.disabled = true;
   try {
@@ -481,6 +530,7 @@ elements.json.addEventListener("click", async () => {
       const report = createPortableReport(reviewed);
       validateReport(report);
       elements.output.value = JSON.stringify(report, null, 2);
+      outputKind = "json";
     });
     setReviewStatus("JSON report prepared with its visible privacy manifest.", false);
   } catch {
@@ -496,12 +546,45 @@ elements.markdown.addEventListener("click", async () => {
     await withLoading("Building the sanitised Markdown summary", async () => {
       await nextPaint();
       elements.output.value = createMarkdownReport(reviewed);
+      outputKind = "markdown";
     });
     setReviewStatus("Markdown report prepared from the reviewed copy.", false);
   } catch {
     // withLoading has supplied a recoverable message.
   } finally {
     setReviewControls();
+  }
+});
+
+function outputFileName() {
+  const base = reviewed.id.replaceAll(/[^A-Za-z0-9._-]/g, "-").slice(0, 80) || "bugtape-report";
+  return outputKind === "json" ? `${base}.bugtape.json` : `${base}.md`;
+}
+
+elements.download.addEventListener("click", () => {
+  const type = outputKind === "json" ? "application/json" : "text/markdown";
+  const url = URL.createObjectURL(
+    new Blob([elements.output.value], { type: `${type};charset=utf-8` })
+  );
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = outputFileName();
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  setReviewStatus(`Downloaded ${link.download}.`, false);
+});
+
+elements.copy.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(elements.output.value);
+    setReviewStatus("Report copied to the clipboard.", false);
+  } catch {
+    elements.output.focus();
+    elements.output.select();
+    setReviewStatus(
+      "The browser blocked clipboard access. The report is selected so you can copy it manually.",
+      false
+    );
   }
 });
 

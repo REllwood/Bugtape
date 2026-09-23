@@ -906,6 +906,13 @@ export function validateReport(input) {
   return createPortableReport(validateSession(input.session));
 }
 
+export function importSession(input) {
+  if (isRecord(input) && Object.hasOwn(input, "format")) {
+    return validateReport(input).session;
+  }
+  return validateSession(input);
+}
+
 export function createMarkdownReport(input) {
   const session = validateSession(input);
   const privacy = privacyManifest(session);

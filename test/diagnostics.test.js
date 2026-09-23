@@ -10,6 +10,7 @@ import {
   createMarkdownReport,
   createPortableReport,
   describeEvent,
+  importSession,
   mergeReviewPolicy,
   scanSensitiveData,
   validateReport,
@@ -308,6 +309,22 @@ test("portable and Markdown reports disclose privacy limits", () => {
   const markdown = createMarkdownReport(reviewed);
   assert.match(markdown, /not deterministic application replay/);
   assert.doesNotMatch(markdown, /reporter@example\.test/);
+});
+
+test("imports accept a saved session or a portable report", () => {
+  assert.deepEqual(importSession(structuredClone(fixture)), fixture);
+  const reviewed = applyReview(fixture);
+  const report = JSON.parse(JSON.stringify(createPortableReport(reviewed)));
+  assert.deepEqual(importSession(report), reviewed);
+  assert.throws(
+    () => importSession({ ...report, format: "something-else" }),
+    (error) => error.code === "UNSUPPORTED_REPORT"
+  );
+  assert.throws(
+    () => importSession({ ...report, version: 2 }),
+    (error) => error.code === "UNSUPPORTED_REPORT"
+  );
+  assert.throws(() => importSession([]), (error) => error.path === "session");
 });
 
 test("oversized imports are rejected before event parsing", () => {
