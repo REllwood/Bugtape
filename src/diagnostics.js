@@ -396,6 +396,9 @@ export class DiagnosticRecorder {
       return undefined;
     }
     const session = clone(this.#session);
+    if (this.#state === "stopped") {
+      return session;
+    }
     session.durationMs = Math.min(this.#elapsed(), MAX_SESSION_DURATION_MS);
     session.clock.stoppedMonotonicMs =
       this.#state === "paused" ? this.#pausedAt : this.#now();
