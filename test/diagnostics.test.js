@@ -258,6 +258,77 @@ test("imports reject structured fields outside the documented capture boundary",
   }
 });
 
+test("the capture boundary matches sensitive key names, not only exact ones", () => {
+  for (const [field, category] of [
+    ["password", "credentials"],
+    ["access_token", "credentials"],
+    ["xApiKey", "credentials"],
+    ["clientSecret", "credentials"],
+    ["requestBodyText", "request bodies"],
+    ["X-Auth-Header", "headers"],
+    ["sessionCookie", "cookies"],
+    ["value", "form values"],
+    ["screenCapture", "video"]
+  ]) {
+    const hostile = structuredClone(fixture);
+    hostile.events[2].payload[field] = "private";
+    assert.throws(
+      () => validateSession(hostile),
+      (error) =>
+        error.code === "EXCLUDED_CAPTURE_FIELD" &&
+        error.path === `session.events.2.payload.${field}` &&
+        error.message.endsWith(`excluded ${category}`),
+      field
+    );
+  }
+});
+
+test("ordinary diagnostic keys stay inside the capture boundary", () => {
+  const session = structuredClone(fixture);
+  Object.assign(session.events[2].payload, {
+    stack: "at checkout (app.js:1:1)",
+    tokenCount: 3,
+    valueCaptured: false,
+    retryAfterMs: 20
+  });
+  assert.equal(validateSession(session).events[2].payload.tokenCount, 3);
+});
+
+test("interaction capture keeps only the target and category", () => {
+  let now = 0;
+  const recorder = new DiagnosticRecorder({ monotonicNow: () => now });
+  recorder.start({ confirmed: true, streams: ["interactions"] });
+  now = 5;
+  const event = recorder.append("interactions", "input", {
+    target: "Card number",
+    category: "text-field",
+    key: "4",
+    valueLength: 16
+  });
+  assert.deepEqual(event.payload, {
+    target: "Card number",
+    category: "text-field",
+    valueCaptured: false
+  });
+});
+
+test("imported network events are reduced to the same metadata as live capture", () => {
+  const imported = structuredClone(fixture);
+  imported.events[1].payload = {
+    url: "https://api.example.test/checkout?customer=42&token=abc",
+    method: "post",
+    status: 422,
+    initiator: "fetch"
+  };
+  assert.deepEqual(validateSession(imported).events[1].payload, {
+    method: "POST",
+    host: "api.example.test",
+    status: 422,
+    durationMs: 0,
+    sizeBytes: 0
+  });
+});
+
 test("imports reject excluded fields nested in environment metadata", () => {
   const hostile = structuredClone(fixture);
   hostile.environment.runtime = {

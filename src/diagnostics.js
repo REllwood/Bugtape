@@ -58,25 +58,48 @@ function payloadSize(value) {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
-const excludedCaptureFields = new Map([
-  ["formvalue", "form values"],
-  ["formvalues", "form values"],
-  ["formdata", "form values"],
-  ["requestbody", "request bodies"],
-  ["responsebody", "request bodies"],
-  ["body", "request bodies"],
-  ["header", "headers"],
-  ["headers", "headers"],
-  ["requestheaders", "headers"],
-  ["responseheaders", "headers"],
-  ["authorization", "headers"],
-  ["authorisation", "headers"],
-  ["cookie", "cookies"],
-  ["cookies", "cookies"],
-  ["setcookie", "cookies"],
-  ["video", "video"],
-  ["screenrecording", "video"]
-]);
+// Keys are compared after lowercasing and dropping punctuation, so
+// "X-Auth-Header", "request_body_text" and "sessionCookie" are all caught.
+// `keys` must match the whole name; `fragments` may appear anywhere in it.
+const excludedCaptureFields = [
+  {
+    category: "form values",
+    keys: ["value", "values"],
+    fragments: ["formvalue", "formdata", "formfield", "inputvalue", "fieldvalue"]
+  },
+  { category: "request bodies", fragments: ["body"] },
+  { category: "headers", fragments: ["header", "authorization", "authorisation"] },
+  { category: "cookies", fragments: ["cookie"] },
+  {
+    category: "credentials",
+    keys: ["auth", "token"],
+    fragments: [
+      "password",
+      "passwd",
+      "passphrase",
+      "secret",
+      "credential",
+      "apikey",
+      "privatekey",
+      "accesstoken",
+      "refreshtoken",
+      "authtoken",
+      "sessiontoken",
+      "idtoken",
+      "bearer"
+    ]
+  },
+  { category: "video", fragments: ["video", "screenrecording", "screencapture"] }
+];
+
+function excludedCategory(key) {
+  const normalisedKey = key.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
+  return excludedCaptureFields.find(
+    ({ keys = [], fragments }) =>
+      keys.includes(normalisedKey) ||
+      fragments.some((fragment) => normalisedKey.includes(fragment))
+  )?.category;
+}
 
 function assertCaptureBoundary(value, path) {
   if (Array.isArray(value)) {
@@ -89,11 +112,10 @@ function assertCaptureBoundary(value, path) {
     return;
   }
   for (const [key, entry] of Object.entries(value)) {
-    const normalisedKey = key.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
-    const excludedCategory = excludedCaptureFields.get(normalisedKey);
-    if (excludedCategory) {
+    const category = excludedCategory(key);
+    if (category) {
       throw new DiagnosticError(
-        `${path}.${key} contains excluded ${excludedCategory}`,
+        `${path}.${key} contains excluded ${category}`,
         `${path}.${key}`,
         "EXCLUDED_CAPTURE_FIELD"
       );
@@ -116,7 +138,12 @@ function validateEvent(event, index, sessionDurationMs) {
   if (!Number.isFinite(event.atMs) || event.atMs < 0 || event.atMs > sessionDurationMs + 1) {
     throw new DiagnosticError(`${path}.atMs is outside the session`, `${path}.atMs`);
   }
-  const payload = capturedValue(event.payload ?? {}, `${path}.payload`);
+  const stream = nonEmpty(event.stream, `${path}.stream`);
+  const payload = streamMetadata(
+    stream,
+    capturedValue(event.payload ?? {}, `${path}.payload`),
+    `${path}.payload`
+  );
   if (payloadSize(payload) > MAX_EVENT_BYTES) {
     throw new DiagnosticError(
       `${path}.payload exceeds ${MAX_EVENT_BYTES} bytes`,
@@ -127,7 +154,7 @@ function validateEvent(event, index, sessionDurationMs) {
   return {
     id: nonEmpty(event.id, `${path}.id`),
     sequence: Number.isInteger(event.sequence) ? event.sequence : index + 1,
-    stream: nonEmpty(event.stream, `${path}.stream`),
+    stream,
     type: nonEmpty(event.type, `${path}.type`),
     atMs: event.atMs,
     payload
@@ -231,6 +258,26 @@ function networkMetadata(payload, path = "payload") {
   };
 }
 
+function interactionMetadata(payload) {
+  return {
+    target: typeof payload.target === "string" ? payload.target : "unnamed control",
+    category: typeof payload.category === "string" ? payload.category : "control",
+    valueCaptured: false
+  };
+}
+
+// Network and interaction events keep only an allowlisted set of fields,
+// whether they were just recorded or imported from a saved session.
+function streamMetadata(stream, payload, path) {
+  if (stream === "network") {
+    return networkMetadata(payload, path);
+  }
+  if (stream === "interactions") {
+    return interactionMetadata(payload);
+  }
+  return payload;
+}
+
 export class DiagnosticRecorder {
   #now;
   #wallNow;
@@ -332,10 +379,7 @@ export class DiagnosticRecorder {
         "SESSION_TOO_LONG"
       );
     }
-    let capturedPayload = safePayload(payload);
-    if (stream === "network") {
-      capturedPayload = networkMetadata(capturedPayload);
-    }
+    const capturedPayload = streamMetadata(stream, safePayload(payload), "payload");
     assertCaptureBoundary(capturedPayload, "payload");
     if (payloadSize(capturedPayload) > MAX_EVENT_BYTES) {
       throw new DiagnosticError(
