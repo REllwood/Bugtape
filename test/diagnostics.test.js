@@ -65,9 +65,11 @@ test("a stopped recorder keeps its final duration stable", () => {
   const recorder = new DiagnosticRecorder({ monotonicNow: () => now });
   recorder.start({ confirmed: true, streams: ["console"] });
   now = 350;
-  recorder.stop();
+  const stopped = recorder.stop();
   now = 9_000;
   assert.equal(recorder.snapshot().durationMs, 250);
+  assert.deepEqual(recorder.snapshot(), stopped);
+  assert.equal(recorder.snapshot().clock.stoppedMonotonicMs, 350);
 });
 
 test("network capture keeps metadata and strips sensitive request fields", () => {
