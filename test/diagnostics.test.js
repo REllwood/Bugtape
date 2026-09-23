@@ -166,12 +166,12 @@ test("overlapping findings are redacted as one span without leaking text", () =>
   const findings = scanSensitiveData(session);
   assert.deepEqual(
     findings.map((finding) => finding.category).sort(),
-    ["email-address", "url-query"]
+    ["credential", "email-address", "url-query"]
   );
   const reviewed = applyReview(session, { findings });
   assert.equal(
     reviewed.events[0].payload.message,
-    "see [REDACTED:url-query,email-address] now"
+    "see [REDACTED:url-query,email-address,credential] now"
   );
 });
 
@@ -195,6 +195,90 @@ test("only accepted findings are redacted when findings overlap", () => {
     reviewed.events[0].payload.message,
     "see https://api.test/reset?email=[REDACTED:email-address] now"
   );
+});
+
+test("the scan covers the title, environment details and field names", () => {
+  const session = consoleSession("nothing sensitive here");
+  session.title = "Checkout fails for alice@example.test";
+  session.environment = { ...session.environment, note: "bob@example.test" };
+  session.events[0].payload = { "carol@example.test": "last seen", level: "error" };
+  const findings = scanSensitiveData(session);
+  assert.deepEqual(
+    findings.map((finding) => [finding.scope, finding.part, finding.path]),
+    [
+      ["title", "value", "title"],
+      ["environment", "value", 'environment["note"]'],
+      ["event", "key", 'payload["carol@example.test"] (field name)']
+    ]
+  );
+  const reviewed = applyReview(session, { findings });
+  assert.equal(reviewed.title, "Checkout fails for [REDACTED:email-address]");
+  assert.equal(reviewed.environment.note, "[REDACTED:email-address]");
+  assert.deepEqual(reviewed.events[0].payload, {
+    "[REDACTED-FIELD]": "last seen",
+    level: "error"
+  });
+  assert.doesNotMatch(JSON.stringify(reviewed), /alice|bob@|carol/);
+});
+
+test("redacted field names stay distinct and nested values are still redacted", () => {
+  const session = consoleSession("unused");
+  session.events[0].payload = {
+    "a@example.test": { "b@example.test": "c@example.test" },
+    "d@example.test": 2
+  };
+  const reviewed = applyReview(session);
+  assert.deepEqual(reviewed.events[0].payload, {
+    "[REDACTED-FIELD]": { "[REDACTED-FIELD]": "[REDACTED:email-address]" },
+    "[REDACTED-FIELD] 2": 2
+  });
+});
+
+test("the scan recognises common secret and personal data formats", () => {
+  for (const [category, sample] of [
+    [
+      "jwt",
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+    ],
+    ["github-token", `ghp_${"a1B2".repeat(9)}`],
+    ["aws-access-key", "AKIAIOSFODNN7EXAMPLE"],
+    ["slack-token", "xoxb-1234567890-abcdefghij"],
+    [
+      "private-key",
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----"
+    ],
+    ["credential", "password=hunter22"],
+    ["credential", '{"client_secret":"s3cr3t-value"}'],
+    ["card-number", "4111 1111 1111 1111"],
+    ["phone-number", "+61 412 345 678"],
+    ["phone-number", "0412 345 678"]
+  ]) {
+    const session = consoleSession(`context ${sample} context`);
+    const findings = scanSensitiveData(session);
+    assert.ok(
+      findings.some((finding) => finding.category === category),
+      `${category} in ${sample}`
+    );
+    assert.doesNotMatch(
+      applyReview(session, { findings }).events[0].payload.message,
+      new RegExp(sample.slice(0, 12).replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    );
+  }
+});
+
+test("numbers that are not valid card numbers are not reported as cards", () => {
+  for (const message of [
+    "order 4111 1111 1111 1112 failed",
+    "order id 20260724021403",
+    "retry at 1727049600000"
+  ]) {
+    const findings = scanSensitiveData(consoleSession(message));
+    assert.equal(
+      findings.some((finding) => finding.category === "card-number"),
+      false,
+      message
+    );
+  }
 });
 
 test("findings that do not fit the value they redact are rejected", () => {
